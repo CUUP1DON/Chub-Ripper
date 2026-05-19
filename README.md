@@ -2,6 +2,8 @@
 
 A desktop app that downloads your [Chub.ai](https://chub.ai) character cards, lorebooks, presets, personas, and chat history to your local machine. Runs on Windows, macOS, and Linux.
 
+![Chub Ripper screenshot](chubripperpreview.png)
+
 ---
 
 ## Requirements
