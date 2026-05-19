@@ -1060,13 +1060,12 @@ class App(ctk.CTk):
                             return
                         if domain_hint not in host: return
                         if resp.status != 200: return
-                        log(f"  → {resp.url.split('?')[0][-80:]}")
                         try:
                             body = resp.json()
                             if isinstance(body, (dict, list)):
                                 candidates.append((resp.url, body))
                                 keys = list(body.keys())[:6] if isinstance(body, dict) else f"list[{len(body)}]"
-                                log(f"     keys={keys}")
+                                log(f"  → {resp.url.split('?')[0][-80:]}  keys={keys}")
                         except Exception:
                             pass
 
@@ -1121,7 +1120,10 @@ class App(ctk.CTk):
                 if self._fetch_lorebooks:
                     def _paginate_lore_direct(extra: dict, label: str):
                         pg = 1
+                        prev_cursor = None
                         while True:
+                            if self._cancel_event.is_set():
+                                flog(f"  lorebooks {label} cancelled at page {pg}"); break
                             params = {
                                 "first": 48, "namespace": "lorebooks",
                                 "nsfw": "true", "nsfl": "false", "chub": "true",
@@ -1136,14 +1138,21 @@ class App(ctk.CTk):
                                     break
                                 body = r.json()
                                 d = body.get("data", {}) if isinstance(body, dict) else {}
+                                cursor = d.get("cursor")
                                 batch = d.get("nodes") or d.get("lorebooks") or []
-                                flog(f"  lorebooks {label} p{pg}: {len(batch)} nodes  count={d.get('count','?')}")
+                                flog(f"  lorebooks {label} p{pg}: {len(batch)} nodes  count={d.get('count','?')}  cursor={str(cursor)[:40] if cursor else None}")
                                 if not batch:
-                                    break
+                                    flog(f"  lorebooks {label} stopping — empty batch"); break
+                                prev_count = len(all_lore_nodes)
                                 for n in _collect(batch, "lorebooks", seen_lore):
                                     all_lore_nodes.append(n)
-                                if not d.get("cursor"):
-                                    break
+                                if not cursor:
+                                    flog(f"  lorebooks {label} stopping — no cursor after page {pg}"); break
+                                if cursor == prev_cursor:
+                                    flog(f"  lorebooks {label} stopping — cursor stuck: {str(cursor)[:40]}"); break
+                                if len(all_lore_nodes) == prev_count:
+                                    flog(f"  lorebooks {label} stopping — no new unique items on page {pg}"); break
+                                prev_cursor = cursor
                                 pg += 1
                                 time.sleep(0.3)
                             except Exception as e:
@@ -1175,7 +1184,10 @@ class App(ctk.CTk):
                 if self._fetch_presets:
                     def _paginate_preset_direct(extra: dict, label: str):
                         pg = 1
+                        prev_cursor = None
                         while True:
+                            if self._cancel_event.is_set():
+                                flog(f"  presets {label} cancelled at page {pg}"); break
                             params = {
                                 "first": 48, "namespace": "presets",
                                 "nsfw": "true", "nsfl": "false", "chub": "true",
@@ -1190,14 +1202,21 @@ class App(ctk.CTk):
                                     break
                                 body = r.json()
                                 d = body.get("data", {}) if isinstance(body, dict) else {}
+                                cursor = d.get("cursor")
                                 batch = d.get("nodes") or d.get("presets") or []
-                                flog(f"  presets {label} p{pg}: {len(batch)} nodes  count={d.get('count','?')}")
+                                flog(f"  presets {label} p{pg}: {len(batch)} nodes  count={d.get('count','?')}  cursor={str(cursor)[:40] if cursor else None}")
                                 if not batch:
-                                    break
+                                    flog(f"  presets {label} stopping — empty batch"); break
+                                prev_count = len(all_preset_nodes)
                                 for n in _collect(batch, "presets", seen_presets):
                                     all_preset_nodes.append(n)
-                                if not d.get("cursor"):
-                                    break
+                                if not cursor:
+                                    flog(f"  presets {label} stopping — no cursor after page {pg}"); break
+                                if cursor == prev_cursor:
+                                    flog(f"  presets {label} stopping — cursor stuck: {str(cursor)[:40]}"); break
+                                if len(all_preset_nodes) == prev_count:
+                                    flog(f"  presets {label} stopping — no new unique items on page {pg}"); break
+                                prev_cursor = cursor
                                 pg += 1
                                 time.sleep(0.3)
                             except Exception as e:
