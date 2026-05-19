@@ -911,15 +911,23 @@ class App(ctk.CTk):
                 base = urlunparse(parsed._replace(query=""))
                 body = first_body
                 pg = 2
-                while body.get("data", {}).get("cursor"):
-                    r = sess.get(base, params={**qs, "page": pg, "first": 48}, timeout=30)
+                while True:
+                    if self._cancel_event.is_set(): break
+                    cursor = body.get("data", {}).get("cursor")
+                    if not cursor: break
+                    r = sess.get(base, params={**qs, "page": pg, "first": 48, "cursor": cursor}, timeout=30)
                     log(f"  {tab} page {pg} → {r.status_code}")
                     if not r.ok: break
                     body = r.json()
+                    new_cursor = body.get("data", {}).get("cursor")
                     batch = _pick_batch(body)
                     if not batch: break
+                    prev_count = len(nodes)
                     for n in _collect(batch, tab, seen):
                         nodes.append(n)
+                    # Guard against APIs that return a stuck/cycling cursor
+                    if new_cursor == cursor or len(nodes) == prev_count:
+                        break
                     log(f"  {tab} page {pg}: +{len(batch)}")
                     pg += 1
                     time.sleep(0.3)
