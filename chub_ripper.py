@@ -830,6 +830,11 @@ class App(ctk.CTk):
         q = self._q
         _log_file = open(ROOT / "debug.log", "a", encoding="utf-8", buffering=1)
         _log_file.write(f"\n{'='*60}\n{time.strftime('%Y-%m-%d %H:%M:%S')}\n{'='*60}\n")
+        _log_file.write(f"Python {sys.version}  |  platform: {sys.platform}\n")
+        _log_file.write(f"fetch: cards={self._fetch_cards} lorebooks={self._fetch_lorebooks} "
+                        f"presets={self._fetch_presets} personas={self._fetch_personas} "
+                        f"chats={self._fetch_chats}  "
+                        f"card_fmt={getattr(self,'_card_fmt','?')}  chat_fmt={getattr(self,'_chat_fmt','?')}\n")
         def log(m):   # status bar + file
             _log_file.write(m + "\n")
             q.put(("LOG", m))
@@ -902,35 +907,47 @@ class App(ctk.CTk):
                             b.get("nodes") or b.get("lorebooks") or [])
                 nodes: list[dict] = []
                 batch = _pick_batch(first_body)
-                log(f"  {tab} page 1: {len(batch)} items  (count={first_body.get('data',{}).get('count','?')})")
+                total_count = first_body.get("data", {}).get("count", "?")
+                log(f"  {tab} page 1: {len(batch)} items  (api total={total_count})")
+                flog(f"  {tab} first_body keys: {list(first_body.keys())[:10]}")
                 for n in _collect(batch, tab, seen):
                     nodes.append(n)
                 parsed = urlparse(captured_url)
                 qs = {k: v[0] for k, v in parse_qs(parsed.query).items()}
                 qs.pop("page", None); qs.pop("cursor", None)
                 base = urlunparse(parsed._replace(query=""))
+                flog(f"  {tab} base url: {base}  fixed qs: {qs}")
                 body = first_body
                 pg = 2
                 while True:
-                    if self._cancel_event.is_set(): break
+                    if self._cancel_event.is_set():
+                        flog(f"  {tab} pagination cancelled at page {pg}"); break
                     cursor = body.get("data", {}).get("cursor")
-                    if not cursor: break
+                    flog(f"  {tab} page {pg} cursor: {str(cursor)[:40] if cursor else None}")
+                    if not cursor:
+                        flog(f"  {tab} pagination done — no cursor after page {pg - 1}"); break
                     r = sess.get(base, params={**qs, "page": pg, "first": 48, "cursor": cursor}, timeout=30)
                     log(f"  {tab} page {pg} → {r.status_code}")
-                    if not r.ok: break
+                    flog(f"  {tab} page {pg} url: {r.url}")
+                    if not r.ok:
+                        flog(f"  {tab} stopping — non-OK status {r.status_code}"); break
                     body = r.json()
                     new_cursor = body.get("data", {}).get("cursor")
                     batch = _pick_batch(body)
-                    if not batch: break
+                    flog(f"  {tab} page {pg} batch={len(batch)}  new_cursor={str(new_cursor)[:40] if new_cursor else None}")
+                    if not batch:
+                        flog(f"  {tab} stopping — empty batch on page {pg}"); break
                     prev_count = len(nodes)
                     for n in _collect(batch, tab, seen):
                         nodes.append(n)
-                    # Guard against APIs that return a stuck/cycling cursor
-                    if new_cursor == cursor or len(nodes) == prev_count:
-                        break
-                    log(f"  {tab} page {pg}: +{len(batch)}")
+                    if new_cursor == cursor:
+                        flog(f"  {tab} stopping — cursor unchanged (stuck): {str(cursor)[:40]}"); break
+                    if len(nodes) == prev_count:
+                        flog(f"  {tab} stopping — no new unique items on page {pg}"); break
+                    log(f"  {tab} page {pg}: +{len(batch)}  total so far: {len(nodes)}")
                     pg += 1
                     time.sleep(0.3)
+                flog(f"  {tab} pagination finished: {len(nodes)} unique nodes across {pg - 1} page(s)")
                 return nodes
 
             def _paginate_sessions(captured_url: str, first_body: dict) -> list[dict]:
@@ -994,20 +1011,27 @@ class App(ctk.CTk):
                 qs.setdefault("include_character", "true")
                 base = urlunparse(parsed._replace(query=""))
                 cursor = first_body.get("cursor")
+                flog(f"  chats initial cursor: {str(cursor)[:40] if cursor else None}")
                 pg = 2
                 while cursor:
                     r = sess.get(base, params={**qs, "cursor": cursor}, timeout=30)
                     log(f"  chats page {pg} → {r.status_code}")
-                    if not r.ok: break
+                    flog(f"  chats page {pg} url: {r.url}")
+                    if not r.ok:
+                        flog(f"  chats stopping — non-OK status {r.status_code}"); break
                     body = r.json()
                     page_char_map = _build_char_map(body)
                     items = _extract(body)
-                    if not items: break
+                    new_cursor = body.get("cursor")
+                    flog(f"  chats page {pg} items={len(items)}  new_cursor={str(new_cursor)[:40] if new_cursor else None}")
+                    if not items:
+                        flog(f"  chats stopping — empty page {pg}"); break
                     sessions.extend(_enrich(s, page_char_map) for s in items)
-                    log(f"  chats page {pg}: +{len(items)}")
-                    cursor = body.get("cursor")
+                    log(f"  chats page {pg}: +{len(items)}  total so far: {len(sessions)}")
+                    cursor = new_cursor
                     pg += 1
                     time.sleep(0.3)
+                flog(f"  chats pagination finished: {len(sessions)} sessions across {pg - 1} page(s)")
                 return sessions
 
             with sync_playwright() as pw:
@@ -1423,7 +1447,7 @@ class App(ctk.CTk):
                     try:
                         r = sess.get(url, timeout=30)
                         if not r.ok:
-                            flog(f"  {url} → {r.status_code}"); continue
+                            log(f"  {url} → {r.status_code}"); continue
                         try:
                             out_p.write_text(
                                 json.dumps(r.json(), indent=2, ensure_ascii=False),
@@ -1471,7 +1495,7 @@ class App(ctk.CTk):
                     try:
                         r = sess.get(url, timeout=30)
                         if not r.ok:
-                            flog(f"  {url} → {r.status_code}"); continue
+                            log(f"  {url} → {r.status_code}"); continue
                         try:
                             out_p.write_text(
                                 json.dumps(r.json(), indent=2, ensure_ascii=False),
@@ -1761,7 +1785,7 @@ def _sess_download_card(sess, fp: str, png_p: Path, json_p: Path,
         try:
             r = sess.get(url, timeout=30)
             if not r.ok:
-                flog(f"  {url} → {r.status_code}"); continue
+                log(f"  {url} → {r.status_code}"); continue
             j = r.json()
             if "spec" in j or "name" in j or "node" in j:
                 char_json = j
