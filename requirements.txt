@@ -1,0 +1,4 @@
+customtkinter
+Pillow
+playwright
+requests
