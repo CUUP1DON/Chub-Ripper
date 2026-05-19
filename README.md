@@ -1,4 +1,6 @@
 # Chub Ripper
+> [!IMPORTANT]
+> This plugin was made using AI IDEs like cursor and copilot in visual studio! Most I have done is just test to make sure everything is operational. Thank claude sonnet & opus 4.6 for the code <3
 
 A desktop app that downloads your [Chub.ai](https://chub.ai) character cards, lorebooks, presets, personas, and chat history to your local machine. Runs on Windows, macOS, and Linux.
 
