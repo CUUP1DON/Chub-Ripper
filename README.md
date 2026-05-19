@@ -111,6 +111,21 @@ Items that already exist locally are skipped automatically (shown as **"Already 
 
 ---
 
+## Network connections
+
+This app **only contacts Chub.ai servers**. Every URL it fetches is shown in the status bar while it runs. The full list of domains:
+
+| Domain | Purpose |
+|---|---|
+| `chub.ai` | Headless browser navigates here to load your cards/chats pages |
+| `ro.chub.ai` | Chub's read-only API — verifies your key, searches for cards/lorebooks/presets |
+| `gateway.chub.ai` | Chub's gateway API — fetches personas and chat history |
+| `avatars.charhub.io` | Chub's CDN — downloads card and character avatar images |
+
+No data is sent to any third party. The headless Chromium browser launched during fetch uses a fresh isolated session (no cookies, no stored credentials) so it has no access to any browser accounts.
+
+---
+
 ## Troubleshooting
 
 **"Could not find Python"** — Install Python 3.11+ and make sure to tick **"Add Python to PATH"** during setup.
