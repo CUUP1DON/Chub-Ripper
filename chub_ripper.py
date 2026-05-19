@@ -1402,13 +1402,15 @@ class App(ctk.CTk):
                     status("lorebooks", fp, "skipped"); saved += 1; continue
                 status("lorebooks", fp, "downloading")
                 ok = False
+                # fullPath from search includes "lorebooks/" namespace prefix — strip it
+                api_path = fp[len("lorebooks/"):] if fp.startswith("lorebooks/") else fp
                 # Try original case then lowercase-author fallback (API is case-sensitive)
-                lore_lc = _lc_author(fp)
-                for url in [f"{REPO_API}/api/lorebooks/{fp}?full=true",
+                lore_lc = _lc_author(api_path)
+                for url in [f"{REPO_API}/api/lorebooks/{api_path}?full=true",
                              f"{REPO_API}/api/lorebooks/{lore_lc}?full=true",
-                             f"{REPO_API}/api/lorebooks/{fp}/raw_definition",
+                             f"{REPO_API}/api/lorebooks/{api_path}/raw_definition",
                              f"{REPO_API}/api/lorebooks/{lore_lc}/raw_definition",
-                             f"{REPO_API}/api/lorebooks/{fp}",
+                             f"{REPO_API}/api/lorebooks/{api_path}",
                              f"{REPO_API}/api/lorebooks/{lore_lc}"]:
                     try:
                         r = sess.get(url, timeout=30)
