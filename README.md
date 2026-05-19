@@ -87,6 +87,8 @@ Paste this key into the **Ch-Api-Key** field in the app. It is remembered betwee
 
 To cancel a fetch or download in progress, click the button again (it becomes a cancel button).
 
+> **Note:** The app may lag or feel unresponsive while loading a large library (hundreds of cards, presets, personas, etc.). This is normal — thumbnails and tile data are being fetched in the background. Give it a moment and it will catch up.
+
 ---
 
 ## Output Folders
