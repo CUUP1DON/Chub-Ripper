@@ -1019,14 +1019,22 @@ class App(ctk.CTk):
                     candidates: list = []
 
                     def on_resp(resp):
-                        if domain_hint not in resp.url: return
+                        # Check hostname only — not the full URL — so query-param
+                        # values (e.g. origin=https://chub.ai) can't smuggle in
+                        # responses from unrelated domains like accounts.google.com.
+                        try:
+                            host = resp.url.split("//")[1].split("/")[0].split("?")[0]
+                        except Exception:
+                            return
+                        if domain_hint not in host: return
                         if resp.status != 200: return
+                        log(f"  → {resp.url.split('?')[0][-80:]}")
                         try:
                             body = resp.json()
                             if isinstance(body, (dict, list)):
                                 candidates.append((resp.url, body))
                                 keys = list(body.keys())[:6] if isinstance(body, dict) else f"list[{len(body)}]"
-                                log(f"  candidate [{resp.url.split('/')[2]}]: {resp.url.split('?')[0][-60:]}  keys={keys}")
+                                log(f"     keys={keys}")
                         except Exception:
                             pass
 
@@ -1091,8 +1099,7 @@ class App(ctk.CTk):
                             }
                             try:
                                 r = sess.get(f"{REPO_API}/search", params=params, timeout=30)
-                                flog(f"  lorebooks {label} p{pg} url: {r.url}")
-                                log(f"  lorebooks {label} p{pg} → {r.status_code}")
+                                log(f"  → {r.url.split('?')[0]}  ({r.status_code})")
                                 if not r.ok:
                                     break
                                 body = r.json()
@@ -1146,8 +1153,7 @@ class App(ctk.CTk):
                             }
                             try:
                                 r = sess.get(f"{REPO_API}/search", params=params, timeout=30)
-                                flog(f"  presets {label} p{pg} url: {r.url}")
-                                log(f"  presets {label} p{pg} → {r.status_code}")
+                                log(f"  → {r.url.split('?')[0]}  ({r.status_code})")
                                 if not r.ok:
                                     break
                                 body = r.json()
@@ -1188,7 +1194,7 @@ class App(ctk.CTk):
                 if self._fetch_personas:
                     try:
                         r = sess.get(f"{GATEWAY_API}/api/personas", timeout=30)
-                        flog(f"  personas → {r.status_code}  url: {r.url}")
+                        log(f"  → {r.url.split('?')[0]}  ({r.status_code})")
                         if r.ok:
                             body = r.json()
                             nodes = body if isinstance(body, list) else body.get("personas", body.get("data", []))
