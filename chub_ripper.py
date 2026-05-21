@@ -313,6 +313,7 @@ class TileGrid:
         self.kind    = kind
         self._p      = parent
         self._tiles: dict[str, Tile] = {}
+        self._names: dict[str, str]  = {}
         self._order: list[str]       = []
         self._visible = 0  # how many are currently gridded
         self._col  = 0
@@ -420,6 +421,7 @@ class TileGrid:
         t = Tile(self._p, name)
         t._selected.set(self._bulk_state)  # inherit current bulk selection state
         self._tiles[key] = t
+        self._names[key] = name.lower()
         self._order.append(key)
         if self._visible < PAGE:
             self._place(t)
@@ -453,11 +455,38 @@ class TileGrid:
         # if bulk_state is False, unrendered tiles are excluded entirely
         return checked
 
+    def filter(self, query: str):
+        q = query.strip().lower()
+        # Render any unrendered tiles so we can show/hide them
+        if q and self._visible < len(self._order):
+            for i in range(self._visible, len(self._order)):
+                self._place(self._tiles[self._order[i]])
+            self._visible = len(self._order)
+        if not q:
+            self._reflow()
+            self._sync_load_btn()
+            return
+        self._col = 0
+        self._row = 0
+        for key in self._order:
+            t = self._tiles[key]
+            if q in self._names.get(key, ""):
+                t.grid(row=self._row, column=self._col, padx=6, pady=6, sticky="nw")
+                self._col += 1
+                if self._col >= self._cols:
+                    self._col = 0
+                    self._row += 1
+            else:
+                t.grid_remove()
+        if self._load_btn:
+            self._load_btn.grid_remove()
+
     def clear(self):
         """Destroy all tiles and reset grid state for a fresh fetch."""
         for t in self._tiles.values():
             t.destroy()
         self._tiles.clear()
+        self._names.clear()
         self._order.clear()
         self._visible  = 0
         self._col      = 0
@@ -624,9 +653,17 @@ class App(ctk.CTk):
             self._sframes[key] = sf
             self._grids[key]   = TileGrid(sf, key)
 
-        # Select All / None buttons (right side of tab row)
+        # Search bar + Select All / None buttons (right side of tab row)
         sel_fr = ctk.CTkFrame(tab_row, fg_color="transparent")
         sel_fr.pack(side="right", padx=8, pady=4)
+
+        self._search_var = ctk.StringVar()
+        self._search_var.trace_add("write", lambda *_: self._on_search())
+        ctk.CTkEntry(sel_fr, textvariable=self._search_var,
+                     placeholder_text="Search…", width=160, height=28,
+                     fg_color=SURFACE, border_color=BORDER, text_color=TEXT,
+                     font=ctk.CTkFont("Segoe UI", 10),
+                     ).pack(side="left", padx=(0, 10))
         ctk.CTkButton(sel_fr, text="✓ All", width=62, height=28,
                       font=ctk.CTkFont("Segoe UI", 10),
                       fg_color=SURFACE, hover_color=CARD, text_color=MUTED,
@@ -674,6 +711,11 @@ class App(ctk.CTk):
             self._tab_btns[k].configure(text_color=MUTED, fg_color="transparent")
         self._sframes[key].grid(row=5, column=0, sticky="nsew")
         self._tab_btns[key].configure(text_color=TEXT, fg_color=CARD)
+        if hasattr(self, "_search_var"):
+            self._search_var.set("")
+
+    def _on_search(self):
+        self._grids[self._active_tab].filter(self._search_var.get())
 
     def _refresh_tab(self, key: str):
         name  = key.capitalize()
@@ -1603,7 +1645,70 @@ class App(ctk.CTk):
                                 flog(f"  first chat body keys: {list(body.keys())[:10] if isinstance(body, dict) else type(body).__name__}")
                                 _first_chat_logged = True
                             msgs = _extract_messages(body)
-                            flog(f"  chat {sid} msgs: {len(msgs)}")
+                            flog(f"  chat {sid} msgs (raw): {len(msgs)}")
+
+                            # Chub only populates message content for the most recently
+                            # loaded messages. For large chats the rest come back as
+                            # {"message": null, ...}. Try paginating backwards by ID
+                            # to recover the missing content.
+                            msg_map = {m["id"]: m for m in msgs if "id" in m}
+                            null_ids = [m["id"] for m in msgs if m.get("message") is None and "id" in m]
+                            if null_ids:
+                                flog(f"  chat {sid}: {len(null_ids)} null-content messages — fetching via POST /messages/content")
+                                BATCH = 50
+                                recovered_total = 0
+                                for _bi in range(0, len(null_ids), BATCH):
+                                    if self._cancel_download_event.is_set(): break
+                                    batch_ids = null_ids[_bi:_bi + BATCH]
+                                    try:
+                                        pr = sess.post(
+                                            f"{GATEWAY_API}/api/core/chats/v2/{sid}/messages/content",
+                                            json={"ids": batch_ids},
+                                            timeout=30)
+                                        flog(f"  /messages/content batch {_bi//BATCH+1}: {len(batch_ids)} ids → {pr.status_code}")
+                                        if not pr.ok:
+                                            flog(f"  /messages/content error body: {pr.text[:300]}"); break
+                                        resp_body = pr.json()
+                                        flog(f"  /messages/content resp type={type(resp_body).__name__} "
+                                             f"keys={list(resp_body.keys())[:6] if isinstance(resp_body, dict) else f'list[{len(resp_body)}]'}")
+                                        # Response: {"messages": {"id_str": "content text", ...}, "extensions": ...}
+                                        messages_val = resp_body.get("messages", {}) if isinstance(resp_body, dict) else resp_body
+                                        recovered = 0
+                                        if isinstance(messages_val, dict):
+                                            for _id_str, _content in messages_val.items():
+                                                if _content is None:
+                                                    continue
+                                                try:
+                                                    _mid = int(_id_str)
+                                                except (ValueError, TypeError):
+                                                    continue
+                                                if _mid in msg_map:
+                                                    msg_map[_mid]["message"] = _content
+                                                    recovered += 1
+                                        elif isinstance(messages_val, list):
+                                            for pm in messages_val:
+                                                _mid = pm.get("id")
+                                                _content = pm.get("message") if pm.get("message") is not None else pm.get("content")
+                                                if _mid is not None and _content is not None:
+                                                    _mid = int(_mid) if not isinstance(_mid, int) else _mid
+                                                    if _mid in msg_map:
+                                                        msg_map[_mid]["message"] = _content
+                                                        recovered += 1
+                                        flog(f"  /messages/content batch {_bi//BATCH+1}: {len(messages_val)} returned, {recovered} recovered")
+                                        recovered_total += recovered
+                                    except Exception as pe:
+                                        flog(f"  /messages/content batch error: {pe}"); break
+                                    time.sleep(DELAY)
+                                flog(f"  /messages/content total recovered: {recovered_total} of {len(null_ids)}")
+
+                            msgs = sorted(msg_map.values(), key=lambda m: int(m.get("id", 0)))
+                            # Drop any remaining stubs that still have no content
+                            null_remaining = sum(1 for m in msgs if m.get("message") is None)
+                            if null_remaining:
+                                log(f"  chat {sid}: {null_remaining} messages still missing content after pagination — dropping stubs")
+                                msgs = [m for m in msgs if m.get("message") is not None]
+                            flog(f"  chat {sid} msgs (final): {len(msgs)}")
+
                             if msgs:
                                 out_dir.mkdir(parents=True, exist_ok=True)
                                 if chat_fmt == "JSON":
