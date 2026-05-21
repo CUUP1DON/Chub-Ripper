@@ -17,7 +17,7 @@ All Python package dependencies are installed automatically by the launch script
 
 | Package | Purpose |
 |---|---|
-| `customtkinter` | GUI framework |
+| `PyQt6` | GUI framework |
 | `Pillow` | Image processing for card thumbnails |
 | `playwright` | Headless browser used to intercept API calls |
 | `requests` | HTTP downloads |
@@ -79,8 +79,8 @@ Paste this key into the **Ch-Api-Key** field in the app. It is remembered betwee
    - **Personas** — persona files
    - **Chats** — chat session history
 4. Choose your preferred output formats:
-   - **Card fmt:** `PNG` (card embedded in image) or `JSON` (raw data)
-   - **Chat fmt:** `JSONL`, `JSON`, or `TXT`
+   - **Card:** `PNG` (card embedded in image) or `JSON` (raw data)
+   - **Chat:** `JSONL`, `JSON`, or `TXT`
 5. Click **Fetch** — the app fetches your library and displays tiles with thumbnails
 6. Use the **✓ All** / **✗ None** buttons per tab to select or deselect items
 7. Click **⬇ Download All** to save everything selected
@@ -88,6 +88,22 @@ Paste this key into the **Ch-Api-Key** field in the app. It is remembered betwee
 To cancel a fetch or download in progress, click the button again (it becomes a cancel button).
 
 > **Note:** The app may lag or feel unresponsive while loading a large library (hundreds of cards, presets, personas, etc.). This is normal — thumbnails and tile data are being fetched in the background. Give it a moment and it will catch up.
+
+### Additional controls
+
+| Control | What it does |
+|---|---|
+| **📁** (next to each tab) | Opens the output folder for that content type. Tooltip shows folder size. |
+| **Search box** | Filters tiles in the current tab by name |
+| **Filter dropdown** | Show only tiles in a given state: All / New / Already saved / Done / Failed |
+| **↓ Date** / **↑ Date** | Sort chats by last-updated date (toggle newest/oldest first) |
+| **↓ Msgs** / **↑ Msgs** | Sort chats by total message count after downloading |
+| **↺ Overwrite** | When active, re-downloads items that were already saved locally |
+| **↺ Retry Failed** | Appears after a download run if any items failed — retries only those items |
+
+**Right-click any tile** for a per-item force re-download toggle.
+
+**Click any chat tile** (after downloading) to preview the first 20 messages in a popup.
 
 ---
 

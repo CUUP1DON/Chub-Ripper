@@ -1,4 +1,4 @@
-customtkinter
+PyQt6
 Pillow
 playwright
 requests
