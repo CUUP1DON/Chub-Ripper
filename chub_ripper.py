@@ -1763,19 +1763,17 @@ class App(QMainWindow):
                 body = first_body; pg = 2
                 while True:
                     if self._cancel_event.is_set(): break
-                    cursor = body.get("data", {}).get("cursor")
-                    if not cursor: break
-                    r = sess.get(base, params={**qs, "page": pg, "first": 48, "cursor": cursor}, timeout=30)
+                    if not body.get("data", {}).get("cursor"): break
+                    r = sess.get(base, params={**qs, "page": pg, "first": 48}, timeout=30)
                     log(f"  {tab} page {pg} → {r.status_code}")
                     if not r.ok: break
                     body = r.json()
-                    new_cursor = body.get("data", {}).get("cursor")
                     batch = _pick_batch(body)
                     if not batch: break
                     prev = len(nodes)
                     for n in _collect(batch, tab, seen):
                         nodes.append(n)
-                    if new_cursor == cursor or len(nodes) == prev: break
+                    if len(nodes) == prev: break
                     log(f"  {tab} page {pg}: +{len(batch)}  total: {len(nodes)}")
                     pg += 1; time.sleep(0.3)
                 return nodes
