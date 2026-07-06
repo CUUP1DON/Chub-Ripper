@@ -28,10 +28,16 @@ pause
 exit /b 1
 
 :install
+echo Using Python: %PYTHON%
+"%PYTHON%" --version
 echo Installing / updating requirements...
-"%PYTHON%" -m pip install -q -r requirements.txt
+"%PYTHON%" -m pip install --upgrade pip
+"%PYTHON%" -m pip install -r requirements.txt
 if %errorlevel% neq 0 (
-    echo pip install failed. See above for details.
+    echo.
+    echo pip install failed. See the errors above for details ^(common causes:
+    echo network/proxy issues, a 32-bit Python install, or a Python version
+    echo older than 3.11^).
     pause
     exit /b 1
 )

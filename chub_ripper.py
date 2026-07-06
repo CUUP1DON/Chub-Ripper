@@ -10,6 +10,7 @@ Setup:
 import base64
 import ctypes
 import ctypes.wintypes
+import datetime as _dt
 import io
 import json
 import os
@@ -88,18 +89,26 @@ def _config_save(updates: dict) -> None:
 
 def _check_deps():
     missing = []
+    errors  = []
     for pkg, pip_name in [("PIL", "Pillow"), ("PyQt6", "PyQt6"),
                            ("requests", "requests"), ("playwright", "playwright")]:
         try:
             __import__(pkg)
-        except ImportError:
+        except ImportError as e:
             missing.append(pip_name)
+            errors.append(f"{pip_name}: {e}")
     if missing:
         import tkinter as _tk, tkinter.messagebox as _mb
         _r = _tk.Tk(); _r.withdraw()
         _mb.showerror("Missing packages",
             f"pip install {' '.join(missing)}"
-            + ("\n  playwright install chromium" if "playwright" in missing else ""))
+            + ("\n  playwright install chromium" if "playwright" in missing else "")
+            + f"\n\nRunning under: {sys.executable}"
+            + "\n\nIf you already ran run.bat/run.sh and still see this, the pip\n"
+              "install likely targeted a different Python than the one shown\n"
+              "above, or failed silently. Re-run run.bat/run.sh and check the\n"
+              "console output for the actual pip error.\n\nDetails:\n"
+            + "\n".join(errors))
         sys.exit(1)
 
 _check_deps()
@@ -550,6 +559,115 @@ def _build_branches(msg_map: dict) -> list:
             for kid in reversed(kids):
                 stack.append((kid, new_path))
     return branches or [sorted(msg_map.values(), key=lambda m: int(m.get("id", 0)))]
+
+def _build_main_path(msg_map: dict) -> list:
+    """Walk msg_map along the is_main path, returning one entry per message:
+    (node, siblings, index_of_node_in_siblings). Siblings are every message
+    that shares the same parent (i.e. alternate branches at that point)."""
+    if not msg_map:
+        return []
+    children: dict = {}
+    for mid, msg in msg_map.items():
+        pid = msg.get("parent_id")
+        if pid is None:
+            continue
+        try:
+            pid = int(pid)
+        except (ValueError, TypeError):
+            continue
+        if pid in msg_map:
+            children.setdefault(pid, []).append(mid)
+    for kids in children.values():
+        kids.sort()
+
+    def _is_root(msg):
+        pid = msg.get("parent_id")
+        if pid is None:
+            return True
+        try:
+            return int(pid) not in msg_map
+        except (ValueError, TypeError):
+            return True
+
+    roots = sorted(mid for mid, msg in msg_map.items() if _is_root(msg))
+    if not roots:
+        return []
+
+    def _pick_main(ids):
+        for i in ids:
+            if msg_map[i].get("is_main"):
+                return i
+        return ids[0]
+
+    path = []
+    cur = _pick_main(roots)
+    while cur is not None:
+        node = msg_map[cur]
+        pid = node.get("parent_id")
+        try:
+            pid = int(pid) if pid is not None else None
+        except (ValueError, TypeError):
+            pid = None
+        sibling_ids = roots if (pid is None or pid not in msg_map) else children.get(pid, [cur])
+        siblings = [msg_map[s] for s in sibling_ids]
+        idx = sibling_ids.index(cur)
+        path.append((node, siblings, idx))
+        kid_ids = children.get(cur, [])
+        cur = _pick_main(kid_ids) if kid_ids else None
+    return path
+
+def _fmt_chat_date(iso: str) -> str:
+    try:
+        dt = _dt.datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+    except Exception:
+        return iso or ""
+    return dt.strftime("%B %d, %Y %I:%M%p")
+
+def _merged_st_lines(path: list, char_name: str, user_name: str) -> list:
+    lines = []
+    for node, siblings, idx in path:
+        if node.get("message") is None:
+            continue
+        is_bot = bool(node.get("is_bot"))
+        entry = {
+            "name": char_name if is_bot else user_name,
+            "is_user": not is_bot,
+            "is_system": False,
+            "send_date": _fmt_chat_date(node.get("created_at", "")),
+            "mes": node.get("message") or "",
+            "extra": {},
+        }
+        if len(siblings) > 1:
+            entry["swipe_id"] = idx
+            entry["swipes"] = [s.get("message") or "" for s in siblings]
+        lines.append(entry)
+    return lines
+
+def _merged_chat_text(path: list, char_name: str, user_name: str, chat_fmt: str) -> str:
+    lines = _merged_st_lines(path, char_name, user_name)
+    if chat_fmt == "JSON":
+        header = {"user_name": user_name, "character_name": char_name,
+                  "create_date": _dt.datetime.now().strftime("%B %d, %Y %I:%M%p"),
+                  "chat_metadata": {}}
+        return json.dumps({"header": header, "messages": lines}, indent=2, ensure_ascii=False)
+    if chat_fmt == "TXT":
+        out = [f"Character: {char_name}", "─" * 40, ""]
+        for entry in lines:
+            out.append(f"{entry['name']}: {entry['mes']}")
+            if entry.get("swipes"):
+                for si, alt in enumerate(entry["swipes"]):
+                    if si == entry["swipe_id"]:
+                        continue
+                    out.append(f"  ↳ [swipe {si+1}/{len(entry['swipes'])}] {alt}")
+            out.append("")
+        return "\n".join(out)
+    # JSONL (SillyTavern chat format): header line + one message per line
+    header = {"user_name": user_name, "character_name": char_name,
+              "create_date": _dt.datetime.now().strftime("%B %d, %Y %I:%M%p"),
+              "chat_metadata": {}}
+    out_lines = [json.dumps(header, ensure_ascii=False)]
+    out_lines.extend(json.dumps(e, ensure_ascii=False) for e in lines)
+    return "\n".join(out_lines)
 
 def _req(sess, method: str, url: str, max_retries: int = 3, **kwargs):
     for attempt in range(max_retries + 1):
@@ -1182,6 +1300,15 @@ class App(QMainWindow):
         self._chat_fmt_cb = _DropBtn(["JSONL", "JSON", "TXT"])
         self._chat_fmt_cb.setFixedSize(96, 32)
         opts_row.addWidget(self._chat_fmt_cb)
+        opts_row.addSpacing(10)
+
+        self._chk_merge_chats = QCheckBox("Merge branches")
+        self._chk_merge_chats.setToolTip(
+            "Save each chat as ONE file instead of one file per branch.\n"
+            "Alternate branches are folded in as SillyTavern-style swipes\n"
+            "on the message where they diverge."
+        )
+        opts_row.addWidget(self._chk_merge_chats)
 
         s_l.addLayout(opts_row)
         root.addWidget(settings)
@@ -1502,6 +1629,7 @@ class App(QMainWindow):
         self._fetch_chats     = self._chk_chats.isChecked()
         self._card_fmt        = self._card_fmt_cb.currentText()
         self._chat_fmt        = self._chat_fmt_cb.currentText()
+        self._merge_chats     = self._chk_merge_chats.isChecked()
 
         self._worker_thread = threading.Thread(target=self._worker, daemon=True)
         self._worker_thread.start()
@@ -1517,6 +1645,12 @@ class App(QMainWindow):
         self._dl_btn.setEnabled(True)
         self._dl_btn.setText("✕ Cancel Download")
         self._status_lbl.setText("Starting downloads…")
+
+        # Re-read format/merge toggles now, in case the user changed them
+        # after Fetch but before clicking Download.
+        self._card_fmt    = self._card_fmt_cb.currentText()
+        self._chat_fmt    = self._chat_fmt_cb.currentText()
+        self._merge_chats = self._chk_merge_chats.isChecked()
 
         self._checked_snapshot: dict[str, set[str]] = {
             tab: grid.get_checked() for tab, grid in self._grids.items()
@@ -2119,8 +2253,9 @@ class App(QMainWindow):
             force_global = self._force_redownload
             force_per    = self._grids
 
-            card_fmt = self._card_fmt
-            chat_fmt = self._chat_fmt
+            card_fmt    = self._card_fmt
+            chat_fmt    = self._chat_fmt
+            merge_chats = self._merge_chats
 
             snapshot         = getattr(self, "_checked_snapshot", {})
             checked_cards    = snapshot.get("cards",    set())
@@ -2332,7 +2467,15 @@ class App(QMainWindow):
                     chat_own_name = s.get("name") or ""
                     file_stem  = _safe(f"{chat_own_name}_{sid}" if chat_own_name else sid)
                     force_chat = force_global or fkey in force_per["chats"]._force_keys
-                    if not force_chat and out_dir.exists() and any(out_dir.glob(f"{file_stem}*{_chat_ext}")):
+                    if merge_chats:
+                        # Only the single merged file counts — leftover *_branch_N
+                        # files from a previous non-merged download should NOT
+                        # block (re)writing the merged file.
+                        already_saved = (out_dir / f"{file_stem}{_chat_ext}").exists() and \
+                            not any(out_dir.glob(f"{file_stem}_branch_*{_chat_ext}"))
+                    else:
+                        already_saved = out_dir.exists() and any(out_dir.glob(f"{file_stem}*{_chat_ext}"))
+                    if not force_chat and already_saved:
                         group_saved += 1; continue
                     try:
                         r = _req(sess, "get",
@@ -2383,25 +2526,38 @@ class App(QMainWindow):
                                     time.sleep(DELAY)
                                 flog(f"  recovered {recovered_total} of {len(null_ids)}")
 
-                            branches = _build_branches(msg_map)
                             any_saved = False; saved_branch_count = 0
-                            for bi, branch_msgs in enumerate(branches):
-                                branch_msgs = [m for m in branch_msgs if m.get("message") is not None]
-                                if not branch_msgs: continue
-                                if len(branches) == 1:
-                                    b_path = out_dir / f"{file_stem}{_chat_ext}"
-                                else:
-                                    b_path = out_dir / f"{file_stem}_branch_{bi+1}{_chat_ext}"
-                                out_dir.mkdir(parents=True, exist_ok=True)
-                                if chat_fmt == "JSON":
-                                    b_path.write_text(json.dumps(branch_msgs, indent=2, ensure_ascii=False), encoding="utf-8")
-                                elif chat_fmt == "TXT":
-                                    b_path.write_text(_msgs_to_txt(branch_msgs, cname), encoding="utf-8")
-                                else:
-                                    b_path.write_text("\n".join(json.dumps(m, ensure_ascii=False) for m in branch_msgs), encoding="utf-8")
-                                any_saved = True
-                                group_total_msgs += len(branch_msgs)
-                                saved_branch_count += 1
+                            if merge_chats:
+                                path = _build_main_path(msg_map)
+                                n_msgs = sum(1 for node, _, _ in path if node.get("message") is not None)
+                                n_swipe_pts = sum(1 for _, sib, _ in path if len(sib) > 1)
+                                if n_msgs:
+                                    out_dir.mkdir(parents=True, exist_ok=True)
+                                    m_path = out_dir / f"{file_stem}{_chat_ext}"
+                                    m_path.write_text(_merged_chat_text(path, cname, "You", chat_fmt), encoding="utf-8")
+                                    any_saved = True
+                                    group_total_msgs += n_msgs
+                                    saved_branch_count = 1
+                                    if n_swipe_pts: group_branched += 1
+                            else:
+                                branches = _build_branches(msg_map)
+                                for bi, branch_msgs in enumerate(branches):
+                                    branch_msgs = [m for m in branch_msgs if m.get("message") is not None]
+                                    if not branch_msgs: continue
+                                    if len(branches) == 1:
+                                        b_path = out_dir / f"{file_stem}{_chat_ext}"
+                                    else:
+                                        b_path = out_dir / f"{file_stem}_branch_{bi+1}{_chat_ext}"
+                                    out_dir.mkdir(parents=True, exist_ok=True)
+                                    if chat_fmt == "JSON":
+                                        b_path.write_text(json.dumps(branch_msgs, indent=2, ensure_ascii=False), encoding="utf-8")
+                                    elif chat_fmt == "TXT":
+                                        b_path.write_text(_msgs_to_txt(branch_msgs, cname), encoding="utf-8")
+                                    else:
+                                        b_path.write_text("\n".join(json.dumps(m, ensure_ascii=False) for m in branch_msgs), encoding="utf-8")
+                                    any_saved = True
+                                    group_total_msgs += len(branch_msgs)
+                                    saved_branch_count += 1
                             if any_saved:
                                 group_saved += 1
                                 if saved_branch_count > 1: group_branched += 1

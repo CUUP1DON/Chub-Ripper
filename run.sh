@@ -12,8 +12,10 @@ else
     exit 1
 fi
 
+echo "Using Python: $("$PYTHON" -c 'import sys; print(sys.executable)') ($("$PYTHON" --version 2>&1))"
 echo "Installing / updating requirements..."
-"$PYTHON" -m pip install -q -r requirements.txt
+"$PYTHON" -m pip install --upgrade pip
+"$PYTHON" -m pip install -r requirements.txt
 
 # Install Playwright browsers on first run (skips if already installed)
 "$PYTHON" -m playwright install chromium --with-deps 2>/dev/null || true
