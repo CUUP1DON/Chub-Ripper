@@ -1878,40 +1878,6 @@ class App(QMainWindow):
                             pass
                         yield n
 
-            def _paginate_nodes(captured_url, first_body, tab, seen):
-                from urllib.parse import urlparse, parse_qs, urlunparse
-                def _pick_batch(b):
-                    d = b.get("data", {}) if isinstance(b, dict) else {}
-                    return (d.get("nodes") or d.get("lorebooks") or
-                            d.get("characters") or b.get("nodes") or b.get("lorebooks") or [])
-                nodes = []
-                batch = _pick_batch(first_body)
-                total_count = first_body.get("data", {}).get("count", "?")
-                log(f"  {tab} page 1: {len(batch)} items  (api total={total_count})")
-                for n in _collect(batch, tab, seen):
-                    nodes.append(n)
-                parsed = urlparse(captured_url)
-                qs = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-                qs.pop("page", None); qs.pop("cursor", None)
-                base = urlunparse(parsed._replace(query=""))
-                body = first_body; pg = 2
-                while True:
-                    if self._cancel_event.is_set(): break
-                    if not body.get("data", {}).get("cursor"): break
-                    r = sess.get(base, params={**qs, "page": pg, "first": 48}, timeout=30)
-                    log(f"  {tab} page {pg} → {r.status_code}")
-                    if not r.ok: break
-                    body = r.json()
-                    batch = _pick_batch(body)
-                    if not batch: break
-                    prev = len(nodes)
-                    for n in _collect(batch, tab, seen):
-                        nodes.append(n)
-                    if len(nodes) == prev: break
-                    log(f"  {tab} page {pg}: +{len(batch)}  total: {len(nodes)}")
-                    pg += 1; time.sleep(0.3)
-                return nodes
-
             def _paginate_sessions(captured_url, first_body):
                 from urllib.parse import urlparse, parse_qs, urlunparse
                 def _extract(body):
@@ -2017,12 +1983,35 @@ class App(QMainWindow):
                 seen_fps: set[str] = set()
                 all_card_nodes: list[dict] = []
                 if self._fetch_cards:
-                    for nav_url, label in [("https://chub.ai/my_characters", "my_characters"),
-                                           ("https://chub.ai/favorites",     "favorites")]:
-                        if self._cancel_event.is_set(): break
-                        url, body = _sniff_page(nav_url, "chub.ai", label)
-                        if url:
-                            all_card_nodes.extend(_paginate_nodes(url, body, "cards", seen_fps))
+                    def _paginate_cards_direct(extra, label):
+                        pg = 1; prev_cursor = None
+                        while True:
+                            if self._cancel_event.is_set(): break
+                            params = {"first": 48, "namespace": "characters",
+                                      "nsfw": "true", "nsfl": "false", "chub": "true",
+                                      "sort": "created_at", "asc": "false",
+                                      "include_forks": "true", "count": "true",
+                                      **extra, "page": pg}
+                            try:
+                                r = sess.get(f"{REPO_API}/search", params=params, timeout=30)
+                                log(f"  → {r.url.split('?')[0]}  ({r.status_code})")
+                                if not r.ok: break
+                                body = r.json()
+                                d = body.get("data", {}) if isinstance(body, dict) else {}
+                                cursor = d.get("cursor")
+                                batch = d.get("nodes") or d.get("characters") or []
+                                if not batch: break
+                                prev_count = len(all_card_nodes)
+                                for n in _collect(batch, "cards", seen_fps):
+                                    all_card_nodes.append(n)
+                                if not cursor or cursor == prev_cursor or len(all_card_nodes) == prev_count: break
+                                prev_cursor = cursor; pg += 1; time.sleep(0.3)
+                            except Exception as e:
+                                log(f"  cards {label} error: {e}"); break
+                    _paginate_cards_direct({"my_favorites": "true"}, "my_favorites")
+                    if my_handle:
+                        _paginate_cards_direct({"username": my_handle, "only_mine": "all",
+                                                 "exclude_mine": "false", "include_forks": "true"}, "authored")
                 log(f"Cards: {len(all_card_nodes)}")
                 if self._cancel_event.is_set():
                     q.put(("CANCELLED",)); return
